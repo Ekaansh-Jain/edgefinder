@@ -146,8 +146,14 @@ def run_backtest(
         prev_ew = ew_w
 
         # ---- append this period to training history for the NEXT step ----
+        # Labels are DEMEANED cross-sectionally: the model learns what makes a
+        # stock beat its PEERS this period, not what makes the whole market rise.
+        # This isolates selection skill and avoids just loading up on high-beta
+        # momentum in a bull market. Demeaning uses only this period's cross-
+        # section, so it stays point-in-time safe.
         feat_history.append(feats)
-        label_history.append(fwd)
+        demeaned = fwd - fwd.mean(skipna=True)
+        label_history.append(demeaned)
 
     strat = pd.Series(strat_rets, index=pd.DatetimeIndex(strat_dates), name="Strategy")
     ew = pd.Series(ew_rets, index=pd.DatetimeIndex(strat_dates[: len(ew_rets)]), name="EqualWeight")

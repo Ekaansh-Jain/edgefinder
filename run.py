@@ -111,13 +111,32 @@ def main() -> None:
     print(format_summary_table(rows))
     print("=" * 70)
 
-    # Honest verdict line.
-    if len(strat) and len(bench):
-        from edgefinder.metrics import cagr
-        edge = cagr(strat, cfg.annualization) - cagr(bench, cfg.annualization)
-        verdict = "an EDGE over NIFTY" if edge > 0 else "NO edge over NIFTY"
-        print(f"\nVerdict: AI strategy CAGR is {edge * 100:+.2f}% vs NIFTY -> {verdict}.")
-        print("Reminder: backtests overstate live performance. Not investment advice.\n")
+    # Honest verdict: the real bar is the EQUAL-WEIGHT reference, not just NIFTY.
+    # Beating NIFTY can be pure size/equal-weight beta; beating EqualWeight on a
+    # risk-adjusted basis is what would indicate genuine selection skill.
+    if len(strat) and len(ew):
+        from edgefinder.metrics import cagr, sharpe
+
+        s_cagr = cagr(strat, cfg.annualization)
+        s_shp = sharpe(strat, cfg.annualization)
+        ew_cagr = cagr(ew, cfg.annualization)
+        ew_shp = sharpe(ew, cfg.annualization)
+        print("\n--- Verdict ---")
+        if len(bench):
+            print(f"vs NIFTY      : CAGR {(s_cagr - cagr(bench, cfg.annualization)) * 100:+.2f}%"
+                  f" (beating the index can be pure size/equal-weight beta)")
+        beats_ew = s_shp > ew_shp and s_cagr >= ew_cagr * 0.99
+        print(f"vs EqualWeight: CAGR {(s_cagr - ew_cagr) * 100:+.2f}%, "
+              f"Sharpe {s_shp - ew_shp:+.2f}  <-- THE REAL BAR")
+        if beats_ew:
+            print("=> The model shows genuine selection skill (beats equal-weight "
+                  "risk-adjusted). Treat as a candidate edge, still subject to "
+                  "survivorship bias and backtest overstatement.")
+        else:
+            print("=> NO real edge yet: the model does NOT beat a naive equal-weight "
+                  "basket on a risk-adjusted basis. The 'AI' is not adding alpha.")
+        print("Reminder: survivorship bias inflates ALL rows; backtests overstate "
+              "live performance. Not investment advice.\n")
 
     _save_outputs(cfg, strat, ew, bench)
 
