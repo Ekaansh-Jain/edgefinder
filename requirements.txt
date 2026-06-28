@@ -1,0 +1,15 @@
+# Core data + ML stack (all free, open-source)
+pandas>=2.2                # 2.2+ needed for the 'ME' month-end offset alias
+numpy>=1.24
+scikit-learn>=1.3
+yfinance>=0.2.40          # free NSE/global price data
+matplotlib>=3.7           # equity-curve plots
+
+# Optional but recommended (the workhorse model). Falls back to sklearn if absent.
+lightgbm>=4.0
+
+# Optional: only needed if you enable the free-LLM news-sentiment layer.
+# Pick ONE provider; none are required for the baseline backtest.
+# groq>=0.9              # Groq free tier (fast). Set GROQ_API_KEY.
+# google-generativeai    # Gemini free tier. Set GEMINI_API_KEY.
+# requests               # for a local Ollama server (fully free/offline)

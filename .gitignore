@@ -1,0 +1,17 @@
+# Data + outputs
+data_cache/
+results/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+*.egg-info/
+.mypy_cache/
+.pytest_cache/
+.ipynb_checkpoints/
+
+# Env / secrets
+.env
+*.key

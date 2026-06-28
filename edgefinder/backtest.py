@@ -1,0 +1,181 @@
+"""Walk-forward cross-sectional backtest engine.
+
+Flow at every rebalance date T:
+  1. Build point-in-time features for all eligible names (data <= T only).
+  2. Train the ranking model on ALL past (features@Ti -> return Ti..Ti+1) pairs.
+     The current period's label is NOT known and never used for training.
+  3. Predict scores at T, pick the top-N, equal-weight them.
+  4. Realise the return over T..T+1 and charge costs based on turnover.
+
+This expanding-window design is the standard defence against look-ahead bias.
+We also run two honest reference strategies on the SAME dates:
+  * 'EqualWeight'  : hold the whole universe equal-weighted (beta benchmark).
+  * 'Buy&HoldNIFTY': the index itself.
+so any "edge" must be judged as outperformance, not just a positive number.
+"""
+
+from __future__ import annotations
+
+import numpy as np
+import pandas as pd
+
+from .config import BacktestConfig
+from .features import build_features, forward_return
+from .model import RankingModel
+
+
+def _rebalance_dates(prices: pd.DataFrame, freq: str) -> list[pd.Timestamp]:
+    """Last available trading day on or before each period boundary."""
+    idx = prices.index
+    period_ends = pd.date_range(idx.min(), idx.max(), freq=freq)
+    dates: list[pd.Timestamp] = []
+    for pe in period_ends:
+        prior = idx[idx <= pe]
+        if len(prior) > 0:
+            d = prior[-1]
+            if not dates or d != dates[-1]:
+                dates.append(d)
+    return dates
+
+
+def _one_way_costs(
+    prev_w: pd.Series, new_w: pd.Series, buy_cost: float, sell_cost: float
+) -> tuple[float, float]:
+    """Return (cost_fraction, one_way_turnover) for moving prev_w -> new_w."""
+    all_idx = prev_w.index.union(new_w.index)
+    pw = prev_w.reindex(all_idx).fillna(0.0)
+    nw = new_w.reindex(all_idx).fillna(0.0)
+    delta = nw - pw
+    buys = delta.clip(lower=0).sum()      # fraction of book bought
+    sells = (-delta.clip(upper=0)).sum()  # fraction of book sold
+    cost = buys * buy_cost + sells * sell_cost
+    one_way_turnover = 0.5 * delta.abs().sum()
+    return cost, one_way_turnover
+
+
+def run_backtest(
+    prices: pd.DataFrame,
+    cfg: BacktestConfig,
+    score_overlay: "pd.DataFrame | None" = None,
+):
+    """Execute the walk-forward backtest.
+
+    Parameters
+    ----------
+    prices : adjusted close, wide (date x ticker). Benchmark excluded.
+    cfg    : BacktestConfig.
+    score_overlay : optional DataFrame (index=date, cols=ticker) of extra scores
+        (e.g. LLM news sentiment) added to the model score before ranking. Must
+        be point-in-time (value at date T known at T). Missing -> 0.
+
+    Returns
+    -------
+    dict with per-strategy period-return Series and diagnostics.
+    """
+    dates = _rebalance_dates(prices, cfg.rebalance)
+    if len(dates) < cfg.train_min_periods + 3:
+        raise RuntimeError(
+            f"Not enough rebalance periods ({len(dates)}). Use a longer history "
+            f"or a higher-frequency rebalance."
+        )
+
+    buy_c = cfg.costs.buy_cost()
+    sell_c = cfg.costs.sell_cost()
+
+    # Accumulated training data across the walk.
+    feat_history: list[pd.DataFrame] = []
+    label_history: list[pd.Series] = []
+
+    strat_rets: list[float] = []
+    ew_rets: list[float] = []
+    strat_dates: list[pd.Timestamp] = []
+    turnovers: list[float] = []
+
+    prev_w = pd.Series(dtype=float)        # strategy weights
+    prev_ew = pd.Series(dtype=float)       # equal-weight weights
+    last_importance = None
+
+    for i in range(len(dates) - 1):
+        t0, t1 = dates[i], dates[i + 1]
+        feats = build_features(prices, t0)
+        if feats.empty:
+            continue
+
+        fwd = forward_return(prices, t0, t1).reindex(feats.index)
+
+        # ---- train on PAST periods only, then predict for t0 ----
+        traded = False
+        if len(feat_history) >= cfg.train_min_periods:
+            X_train = pd.concat(feat_history)
+            y_train = pd.concat(label_history)
+            model = RankingModel(
+                use_lightgbm=cfg.use_lightgbm, random_state=cfg.random_state
+            )
+            model.fit(X_train, y_train)
+            scores = model.predict(feats)
+            last_importance = model.feature_importance()
+
+            if score_overlay is not None and t0 in score_overlay.index:
+                ov = score_overlay.loc[t0].reindex(scores.index).fillna(0.0)
+                # standardise overlay so it doesn't dominate the model score
+                if ov.std() > 0:
+                    ov = (ov - ov.mean()) / ov.std()
+                scores = scores + ov
+
+            picks = scores.sort_values(ascending=False).head(cfg.top_n).index
+            new_w = pd.Series(1.0 / len(picks), index=picks)
+            traded = True
+        else:
+            new_w = pd.Series(dtype=float)  # not trading yet (warm-up)
+
+        # ---- realise strategy return over t0..t1, net of costs ----
+        if traded:
+            gross = float((new_w * fwd.reindex(new_w.index).fillna(0.0)).sum())
+            cost, to = _one_way_costs(prev_w, new_w, buy_c, sell_c)
+            strat_rets.append(gross - cost)
+            turnovers.append(to)
+            strat_dates.append(t1)
+            prev_w = new_w
+
+        # ---- equal-weight reference on the same eligible universe ----
+        ew_w = pd.Series(1.0 / len(feats), index=feats.index)
+        ew_gross = float((ew_w * fwd.fillna(0.0)).sum())
+        ew_cost, _ = _one_way_costs(prev_ew, ew_w, buy_c, sell_c)
+        if traded:
+            ew_rets.append(ew_gross - ew_cost)
+        prev_ew = ew_w
+
+        # ---- append this period to training history for the NEXT step ----
+        feat_history.append(feats)
+        label_history.append(fwd)
+
+    strat = pd.Series(strat_rets, index=pd.DatetimeIndex(strat_dates), name="Strategy")
+    ew = pd.Series(ew_rets, index=pd.DatetimeIndex(strat_dates[: len(ew_rets)]), name="EqualWeight")
+
+    return {
+        "strategy_returns": strat,
+        "equalweight_returns": ew,
+        "avg_turnover": float(np.mean(turnovers)) if turnovers else float("nan"),
+        "rebalance_dates": strat_dates,
+        "feature_importance": last_importance,
+        "model_kind": RankingModel(use_lightgbm=cfg.use_lightgbm).kind,
+    }
+
+
+def benchmark_returns(
+    benchmark_prices: pd.Series, on_dates: list[pd.Timestamp]
+) -> pd.Series:
+    """Period returns of the benchmark aligned to the strategy's rebalance dates."""
+    vals = []
+    idx = []
+    bp = benchmark_prices.dropna()
+    for i in range(1, len(on_dates)):
+        t0, t1 = on_dates[i - 1], on_dates[i]
+        try:
+            p0 = bp.loc[:t0].iloc[-1]
+            p1 = bp.loc[:t1].iloc[-1]
+            vals.append(p1 / p0 - 1.0)
+            idx.append(t1)
+        except (IndexError, KeyError):
+            continue
+    return pd.Series(vals, index=pd.DatetimeIndex(idx), name="NIFTY")
