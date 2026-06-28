@@ -21,30 +21,62 @@ def _cache_path(cache_dir: str, ticker: str) -> str:
     return os.path.join(cache_dir, f"{safe}.csv")
 
 
-def _download_one(ticker: str, start: str, end: str) -> pd.Series | None:
-    """Download adjusted close for one ticker. Returns None on failure."""
-    import yfinance as yf
-
-    try:
-        df = yf.download(
-            ticker,
-            start=start,
-            end=end,
-            auto_adjust=True,      # 'Close' becomes split/dividend adjusted
-            progress=False,
-            threads=False,
-        )
-    except Exception as exc:  # network/ticker errors should not kill the run
-        print(f"  ! download failed for {ticker}: {exc}")
-        return None
-
+def _extract_close(df: "pd.DataFrame | None", ticker: str) -> "pd.Series | None":
     if df is None or df.empty or "Close" not in df:
         return None
     s = df["Close"].copy()
     if isinstance(s, pd.DataFrame):  # yfinance sometimes returns a 1-col frame
         s = s.iloc[:, 0]
+    s = s.dropna()
+    if s.empty:
+        return None
     s.name = ticker
     return s
+
+
+def _download_one(
+    ticker: str, start: str, end: str, retries: int = 3, base_delay: float = 1.5
+) -> pd.Series | None:
+    """Download adjusted close for one ticker, with retry + backoff.
+
+    Yahoo's free endpoint frequently returns transient 404 / "possibly delisted"
+    errors under load — these are RATE LIMITING, not real delistings. We retry
+    with exponential backoff and fall back to the per-ticker history() API,
+    which often succeeds when the bulk download() endpoint is throttled.
+    """
+    import yfinance as yf
+
+    last_err = None
+    for attempt in range(retries):
+        # --- primary: bulk download endpoint ---
+        try:
+            df = yf.download(
+                ticker, start=start, end=end, auto_adjust=True,
+                progress=False, threads=False,
+            )
+            s = _extract_close(df, ticker)
+            if s is not None:
+                return s
+        except Exception as exc:
+            last_err = exc
+
+        # --- fallback: per-ticker history endpoint ---
+        try:
+            df = yf.Ticker(ticker).history(start=start, end=end, auto_adjust=True)
+            s = _extract_close(df, ticker)
+            if s is not None:
+                return s
+        except Exception as exc:
+            last_err = exc
+
+        if attempt < retries - 1:
+            time.sleep(base_delay * (2 ** attempt))  # 1.5s, 3s, 6s ...
+
+    if last_err is not None:
+        print(f"  ! {ticker}: giving up after {retries} tries ({last_err})")
+    else:
+        print(f"  ! {ticker}: no data returned (likely transient rate-limit)")
+    return None
 
 
 def load_prices(
@@ -60,6 +92,7 @@ def load_prices(
     """
     os.makedirs(cache_dir, exist_ok=True)
     series: dict[str, pd.Series] = {}
+    failed: list[str] = []
 
     for i, ticker in enumerate(tickers, 1):
         path = _cache_path(cache_dir, ticker)
@@ -79,10 +112,12 @@ def load_prices(
             s = _download_one(ticker, start, end)
             if s is not None and not s.empty:
                 s.to_frame(name=ticker).to_csv(path)
-                time.sleep(0.2)  # be polite to the free endpoint
+            time.sleep(0.4)  # be polite to the free endpoint (reduces throttling)
 
         if s is not None and not s.empty:
             series[ticker] = s
+        else:
+            failed.append(ticker)
 
     if not series:
         raise RuntimeError(
@@ -94,6 +129,13 @@ def load_prices(
     # Drop fully-empty columns and forward-fill small gaps (holidays etc.)
     prices = prices.dropna(axis=1, how="all").ffill(limit=5)
     print(f"Loaded prices: {prices.shape[1]} tickers x {prices.shape[0]} days")
+    if failed:
+        print(
+            f"NOTE: {len(failed)} ticker(s) failed (usually transient Yahoo "
+            f"rate-limiting, NOT delisting): {', '.join(failed)}\n"
+            f"      Successful tickers are cached — just RE-RUN the same command "
+            f"to retry only the failed ones."
+        )
     return prices
 
 
