@@ -32,9 +32,14 @@ import pandas as pd
 
 
 def _normalize(window: pd.DataFrame) -> pd.DataFrame:
-    """Return index starting at 1.0 for each column over the window."""
-    first = window.iloc[0]
-    return window.divide(first).where(first != 0)
+    """Return index starting at 1.0 for each column over the window.
+
+    df.divide(row) aligns the row on COLUMNS (axis=1), so each column is divided
+    by its own first value — exactly what we want. (An earlier `.where(first!=0)`
+    here aligned on the row index instead and nuked the whole frame to NaN.)
+    """
+    norm = window.divide(window.iloc[0])
+    return norm.replace([np.inf, -np.inf], np.nan)
 
 
 def select_pairs_distance(
