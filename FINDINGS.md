@@ -35,6 +35,18 @@ benchmark.
 | **Low-volatility anomaly (nifty200)** | **+0.03** | no (t≈-1.3) | **~tie on Sharpe, but vol -23%, drawdown -36%, turnover 7.7%** |
 | Low-vol + regime filter | -0.23 | **yes, WORSE (t≈-2.5)** | double de-risking hurts; don't combine |
 
+### Market-neutral pairs trading (judged on absolute Sharpe + market correlation)
+
+| Variant | Sharpe | Corr to NIFTY | Notes |
+|---|---|---|---|
+| Distance method | -4.27 | +0.10 | market-neutral ✓ but loses; spreads trended, not reverted |
+| + cointegration (ADF) filter | -4.55 | +0.11 | filtering didn't rescue it; OOS breakdown + decay |
+
+(Caveat: the starkly negative pairs Sharpe is partly implementation — entry/exit
+bands, no forced close at window edges, idealised shorting costs — and was not
+fully debuggable in an offline environment. Read as "this free-data
+implementation lost", not "pairs trading is impossible".)
+
 ## Conclusions
 
 1. **No statistically significant *return* edge over equal-weight** was found from
@@ -84,3 +96,24 @@ pip install -r requirements.txt
 python run.py --strategy lowvol --universe nifty200     # the defensible result
 python run.py                                           # the momentum ML baseline
 ```
+
+
+
+## Final word (after an exhaustive sweep)
+
+We tested essentially every major strategy class available with free data:
+cross-sectional factor ML, factor refinements, regime filtering, news sentiment,
+the low-volatility anomaly, and market-neutral pairs/stat-arb (with cointegration
+filtering). **None produced a statistically significant, cost-surviving return
+edge over a simple equal-weight basket.** The single positive, defensible result
+is the **low-volatility anomaly**: similar Sharpe to equal-weight but materially
+lower volatility, drawdown, and turnover — and likely *better* once survivorship
+bias (which penalises low-vol here) is removed.
+
+This is the honest answer to "can AI find an edge in the Indian market on free
+data": for a retail participant, **not a return edge** — the markets are largely
+efficient at this resolution. The realistic, evidence-based takeaways are
+risk-management, not alpha: own a broad/equal-weight basket for the size premium,
+use low-volatility selection for a smoother, cheaper ride. Anything beyond that
+needs data or infrastructure (point-in-time fundamentals, historical news via
+BigQuery GKG, intraday/order-book, faster execution) that free tools don't give.
