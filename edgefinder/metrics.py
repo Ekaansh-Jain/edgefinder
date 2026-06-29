@@ -96,3 +96,34 @@ def format_summary_table(rows: list[dict]) -> str:
         " | ".join(fmt(c, r.get(c)).ljust(widths[c]) for c in cols) for r in rows
     )
     return f"{line}\n{sep}\n{body}"
+
+
+
+def excess_stats(
+    strat: pd.Series, ref: pd.Series, periods_per_year: int
+) -> dict:
+    """Statistical significance of the strategy's excess return over a reference.
+
+    Aligns the two return series on common dates, takes the per-period
+    difference, and reports:
+      * t_stat            : a paired t-stat on the mean excess return. As a rough
+                            rule, |t| > ~2 suggests the edge is unlikely to be
+                            pure chance (with the usual multiple-testing caveats).
+      * information_ratio : annualised mean excess / tracking error.
+      * mean_excess_ann   : annualised mean excess return.
+      * n                 : number of overlapping periods.
+    """
+    df = pd.concat([strat.rename("s"), ref.rename("r")], axis=1).dropna()
+    if len(df) < 3:
+        return {}
+    d = df["s"] - df["r"]
+    sd = d.std()
+    if sd == 0:
+        return {}
+    n = len(d)
+    return {
+        "n": int(n),
+        "t_stat": float(d.mean() / (sd / np.sqrt(n))),
+        "information_ratio": float(np.sqrt(periods_per_year) * d.mean() / sd),
+        "mean_excess_ann": float(d.mean() * periods_per_year),
+    }

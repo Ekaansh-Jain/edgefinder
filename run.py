@@ -51,6 +51,9 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--news-window", type=int, default=30,
                    help="trailing days of news aggregated per rebalance date")
     p.add_argument("--news-cache-dir", default="news_cache")
+    p.add_argument("--shuffle-news", action="store_true",
+                   help="PLACEBO TEST: randomly reassign news scores across "
+                        "tickers. If the edge survives, it was never the news.")
     p.add_argument("--regime-filter", action="store_true",
                    help="de-risk toward cash when the benchmark is below its MA")
     p.add_argument("--regime-ma-days", type=int, default=200)
@@ -117,6 +120,20 @@ def main() -> None:
             print(f"Building LLM sentiment overlay from {len(news)} news rows ...")
             score_overlay = build_sentiment_overlay(news, rb, list(prices.columns))
 
+    # PLACEBO: scramble which ticker each news score attaches to (per date),
+    # keeping the value distribution. If the edge persists, it isn't the news.
+    if score_overlay is not None and args.shuffle_news:
+        import numpy as _np
+
+        rng = _np.random.default_rng(cfg.random_state)
+        shuffled = score_overlay.copy()
+        for idx in shuffled.index:
+            vals = shuffled.loc[idx].to_numpy()
+            rng.shuffle(vals)
+            shuffled.loc[idx] = vals
+        score_overlay = shuffled
+        print("PLACEBO MODE: news scores randomly reassigned across tickers.")
+
     regime_series = bench_px if cfg.regime_filter else None
     result = run_backtest(
         prices, cfg, score_overlay=score_overlay, regime_series=regime_series
@@ -169,6 +186,17 @@ def main() -> None:
         beats_ew = s_shp > ew_shp and s_cagr >= ew_cagr * 0.99
         print(f"vs EqualWeight: CAGR {(s_cagr - ew_cagr) * 100:+.2f}%, "
               f"Sharpe {s_shp - ew_shp:+.2f}  <-- THE REAL BAR")
+
+        # Significance of the excess return over EqualWeight (is it noise?).
+        from edgefinder.metrics import excess_stats
+
+        es = excess_stats(strat, ew, cfg.annualization)
+        if es:
+            sig = ("likely SIGNIFICANT" if abs(es["t_stat"]) > 2
+                   else "NOT significant (could be noise)")
+            print(f"Significance : t-stat {es['t_stat']:+.2f} over {es['n']} periods, "
+                  f"info ratio {es['information_ratio']:+.2f}  -> {sig}")
+            print("               (|t|>2 ~ unlikely to be chance; mind multiple-testing)")
         if beats_ew:
             print("=> The model shows genuine selection skill (beats equal-weight "
                   "risk-adjusted). Treat as a candidate edge, still subject to "
