@@ -53,6 +53,42 @@ def _one_way_costs(
     return cost, one_way_turnover
 
 
+def _select_and_weight(
+    scores: pd.Series, feats: pd.DataFrame, prev_w: pd.Series, cfg
+) -> pd.Series:
+    """Pick holdings (with a turnover buffer) and assign weights.
+
+    Turnover buffer (hysteresis): a current holding is kept as long as it stays
+    ranked within (1+buffer)*top_n, instead of being dumped the moment it leaves
+    the top_n. This sharply cuts churn (and cost) versus rebuilding every period.
+
+    Weighting: 'inv_vol' gives lower-volatility names more weight (a risk-parity
+    tilt that usually improves Sharpe and tames drawdowns); 'equal' is the
+    classic equal-weight.
+    """
+    ranked = scores.sort_values(ascending=False)
+    n = cfg.top_n
+    extended = set(ranked.head(int(round(n * (1 + cfg.turnover_buffer)))).index)
+
+    # Keep current holdings still ranked inside the extended band (preserve rank order).
+    kept = [t for t in ranked.index if t in prev_w.index and t in extended][:n]
+    need = max(0, n - len(kept))
+    additions = [t for t in ranked.index if t not in kept][:need]
+    picks = [p for p in (kept + additions) if p in feats.index]
+    if not picks:
+        return pd.Series(dtype=float)
+
+    if cfg.weighting == "inv_vol":
+        vol = feats.loc[picks, "vol_6m"].astype(float)
+        vol = vol.replace([np.inf, -np.inf], np.nan).fillna(vol.median())
+        vol = vol.clip(lower=0.05)        # floor at 5% ann. vol to avoid blow-ups
+        inv = 1.0 / vol
+        w = inv / inv.sum()
+    else:  # equal
+        w = pd.Series(1.0 / len(picks), index=pd.Index(picks))
+    return w
+
+
 def run_backtest(
     prices: pd.DataFrame,
     cfg: BacktestConfig,
@@ -122,9 +158,8 @@ def run_backtest(
                     ov = (ov - ov.mean()) / ov.std()
                 scores = scores + ov
 
-            picks = scores.sort_values(ascending=False).head(cfg.top_n).index
-            new_w = pd.Series(1.0 / len(picks), index=picks)
-            traded = True
+            new_w = _select_and_weight(scores, feats, prev_w, cfg)
+            traded = len(new_w) > 0
         else:
             new_w = pd.Series(dtype=float)  # not trading yet (warm-up)
 

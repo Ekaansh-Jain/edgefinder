@@ -35,6 +35,10 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--end", default=None)
     p.add_argument("--rebalance", default="ME", help="pandas offset, e.g. ME or W-FRI")
     p.add_argument("--top-n", type=int, default=25)
+    p.add_argument("--weighting", default="inv_vol", choices=["inv_vol", "equal"],
+                   help="how to weight selected names (inv_vol = risk-parity tilt)")
+    p.add_argument("--turnover-buffer", type=float, default=0.5,
+                   help="keep a holding while ranked within (1+buffer)*top_n")
     p.add_argument("--annualization", type=int, default=12,
                    help="12 for monthly, 52 for weekly")
     p.add_argument("--train-min-periods", type=int, default=24)
@@ -57,6 +61,8 @@ def main() -> None:
         end=args.end,
         rebalance=args.rebalance,
         top_n=args.top_n,
+        weighting=args.weighting,
+        turnover_buffer=args.turnover_buffer,
         annualization=args.annualization,
         train_min_periods=args.train_min_periods,
         use_lightgbm=not args.no_lightgbm,
@@ -94,7 +100,8 @@ def main() -> None:
     bench = benchmark_returns(bench_px, list(strat.index)) if len(strat) else pd.Series(dtype=float)
     bench = bench.reindex(strat.index).dropna()
 
-    print(f"\nModel used: {result['model_kind']}  |  avg one-way turnover/period: "
+    print(f"\nModel used: {result['model_kind']}  |  weighting: {cfg.weighting}  |  "
+          f"turnover buffer: {cfg.turnover_buffer}  |  avg one-way turnover/period: "
           f"{result['avg_turnover'] * 100:.1f}%")
     if result["feature_importance"] is not None:
         print("\nTop features (LightGBM importance):")

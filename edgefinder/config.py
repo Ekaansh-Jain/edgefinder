@@ -61,8 +61,11 @@ class BacktestConfig:
 
     # --- Strategy ---
     rebalance: str = "ME"             # pandas offset: 'ME' month-end, 'W-FRI' weekly
-    top_n: int = 25                   # number of stocks held (equal-weighted)
+    top_n: int = 25                   # number of stocks held
     min_history_days: int = 260       # require ~1y history before a stock is eligible
+    weighting: str = "inv_vol"        # 'equal' or 'inv_vol' (lower-vol names get more)
+    turnover_buffer: float = 0.5      # keep a holding while ranked within
+                                      # (1+buffer)*top_n; reduces churn/costs
 
     # --- Model / walk-forward ---
     # We retrain the ranking model at each rebalance using only PAST data.
