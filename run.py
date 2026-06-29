@@ -153,7 +153,14 @@ def main() -> None:
           f"turnover buffer: {cfg.turnover_buffer}  |  avg one-way turnover/period: "
           f"{result['avg_turnover'] * 100:.1f}%{regime_note}")
     if score_overlay is not None:
-        print("News overlay: ACTIVE (added to model ranking score)")
+        # Guard against the silent-zeros trap: an all-zero overlay adds nothing,
+        # so any "edge" must NOT be attributed to news.
+        nonzero = float(score_overlay.abs().to_numpy().sum()) > 0
+        if nonzero:
+            print("News overlay: ACTIVE (added to model ranking score)")
+        else:
+            print("News overlay: INACTIVE — overlay is empty/all-zero, so results "
+                  "reflect the PRICE MODEL ONLY. Do NOT attribute any edge to news.")
     if result["feature_importance"] is not None:
         print("\nTop features (LightGBM importance):")
         print(result["feature_importance"].head(6).to_string())

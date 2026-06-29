@@ -100,10 +100,29 @@ def load_tone(
 ) -> dict[str, pd.Series]:
     """Return {ticker: daily tone Series}, fetching+caching as needed.
 
+    !!! IMPORTANT LIMITATION !!!
+    The GDELT DOC 2.0 API only covers roughly the LAST 1–1.5 YEARS of news
+    (3 months by default). It CANNOT serve a multi-year historical backtest.
+    Requesting an older window (e.g. 2015) returns NOTHING — which previously
+    produced a silent all-zero overlay that masqueraded as a price-model result.
+    For genuine historical (2015+) news tone, use the GDELT GKG via BigQuery
+    instead (see README); this DOC-API path is only useful for the recent window
+    or live/forward testing.
+
     Caches BOTH hits (CSV) and misses (an empty '.empty' marker) so that a
     re-run never re-queries the slow GDELT endpoint for tickers it already
     knows about. Delete the cache dir or pass force_refresh=True to refetch.
     """
+    # Loud warning if the requested window is older than GDELT DOC can serve.
+    try:
+        if (pd.Timestamp.today() - pd.Timestamp(start)).days > 550:
+            print("WARNING: GDELT DOC 2.0 API only covers ~the last 1–1.5 years. "
+                  f"Your start={start} is older, so most/all queries will return "
+                  "NO DATA. This endpoint cannot backtest a multi-year window — "
+                  "use the BigQuery GKG path for historical tone (see README).")
+    except Exception:
+        pass
+
     os.makedirs(cache_dir, exist_ok=True)
     out: dict[str, pd.Series] = {}
     n_hit = n_fetched = n_empty = 0
