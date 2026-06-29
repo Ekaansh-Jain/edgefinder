@@ -136,6 +136,39 @@ python run.py --news gdelt --regime-filter --universe midcap
 
 ---
 
+## Volatility Risk Premium (defined-risk option selling) — `run_vrp.py`
+
+Indian index options are systematically overpriced (implied vol > realized), so
+selling premium has positive expectancy. **But it is negatively skewed** — many
+small wins, then a big move hands a chunk back. This backtester only sells
+**defined-risk iron condors** (max loss capped by long wings) and sizes every
+trade so the capped loss is a small % of capital — and it **reports the tail
+honestly** (worst trade, drawdown, skew, losing streaks), because that tail is
+what ruins the 91% of option sellers who lose.
+
+You must supply **historical Nifty options data** (not on yfinance). Free path:
+NSE F&O bhavcopy → a CSV with columns `date,expiry,strike,option_type,close`
+(raw bhavcopy is auto-normalised). See `edgefinder/options_data.py` for sources
+(NSE bhavcopy, `nsepy`/`jugaad-data`, or TrueData/AlgoTest exports).
+
+```bash
+# from a CSV you have (tidy or raw bhavcopy):
+python run_vrp.py --data nifty_options.csv
+
+# best-effort auto-fetch (fragile), then run:
+python run_vrp.py --fetch --start 2019-01-01 --end 2024-12-31
+
+# tune structure / risk:
+python run_vrp.py --data opts.csv --short-pct 0.02 --wing-points 300 --sizing-pct 0.02
+```
+
+**Read the TAIL block, not just the Sharpe.** A good result needs a positive
+Sharpe *and* a survivable worst-trade/drawdown. Keep `--sizing-pct` small
+(1–2%); that discipline is the entire difference between harvesting the premium
+and blowing up.
+
+---
+
 ## Configuration
 
 Tune everything in `edgefinder/config.py` or via CLI flags:
@@ -208,8 +241,11 @@ edgefinder/
   llm_sentiment.py # optional free-LLM news re-scoring (Groq/Gemini/Ollama)
   gdelt_news.py    # free GDELT news-sentiment overlay (no API key)
   pairs.py         # market-neutral pairs trading (statistical arbitrage)
+  options_data.py  # source-agnostic historical options loader (NSE bhavcopy etc.)
+  vrp.py           # defined-risk volatility-risk-premium (iron condor) backtester
 run.py             # CLI entrypoint (long-only cross-sectional)
 run_pairs.py       # CLI entrypoint (market-neutral pairs trading)
+run_vrp.py         # CLI entrypoint (defined-risk option selling / VRP)
 .env.example       # placeholder API keys (all optional)
 .github/workflows/backtest.yml  # run in CI, get real numbers
 ```

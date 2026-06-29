@@ -12,6 +12,11 @@ lightgbm>=4.0
 # Optional: cointegration filtering for pairs trading (run_pairs.py --cointegration)
 # statsmodels>=0.14
 
+# Optional: best-effort NSE F&O bhavcopy fetch for the VRP options backtest
+# (run_vrp.py --fetch). Fragile; manual CSV download also works.
+# jugaad-data>=0.26
+# nsepy>=0.8
+
 # Optional: only needed if you enable the free-LLM news re-scoring layer.
 # Pick ONE provider; none are required for the baseline or the GDELT overlay.
 # groq>=0.9              # Groq free tier (fast). Set GROQ_API_KEY.
