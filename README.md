@@ -207,7 +207,9 @@ edgefinder/
   metrics.py       # CAGR / Sharpe / drawdown / turnover
   llm_sentiment.py # optional free-LLM news re-scoring (Groq/Gemini/Ollama)
   gdelt_news.py    # free GDELT news-sentiment overlay (no API key)
-run.py             # CLI entrypoint
+  pairs.py         # market-neutral pairs trading (statistical arbitrage)
+run.py             # CLI entrypoint (long-only cross-sectional)
+run_pairs.py       # CLI entrypoint (market-neutral pairs trading)
 .env.example       # placeholder API keys (all optional)
 .github/workflows/backtest.yml  # run in CI, get real numbers
 ```
