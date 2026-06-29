@@ -89,10 +89,29 @@ def _select_and_weight(
     return w
 
 
+def _regime_exposure(
+    regime_series: "pd.Series | None", as_of: pd.Timestamp, cfg
+) -> float:
+    """Exposure multiplier at a rebalance date (point-in-time).
+
+    Full exposure (1.0) when the regime filter is off, or when the benchmark
+    closes at/above its trailing moving average; otherwise ``risk_off_exposure``.
+    Only uses benchmark data up to ``as_of`` (no look-ahead).
+    """
+    if not cfg.regime_filter or regime_series is None:
+        return 1.0
+    hist = regime_series.loc[:as_of].dropna()
+    if len(hist) < cfg.regime_ma_days:
+        return 1.0  # not enough history -> stay invested
+    ma = hist.tail(cfg.regime_ma_days).mean()
+    return 1.0 if hist.iloc[-1] >= ma else float(cfg.risk_off_exposure)
+
+
 def run_backtest(
     prices: pd.DataFrame,
     cfg: BacktestConfig,
     score_overlay: "pd.DataFrame | None" = None,
+    regime_series: "pd.Series | None" = None,
 ):
     """Execute the walk-forward backtest.
 
@@ -101,8 +120,11 @@ def run_backtest(
     prices : adjusted close, wide (date x ticker). Benchmark excluded.
     cfg    : BacktestConfig.
     score_overlay : optional DataFrame (index=date, cols=ticker) of extra scores
-        (e.g. LLM news sentiment) added to the model score before ranking. Must
-        be point-in-time (value at date T known at T). Missing -> 0.
+        (e.g. GDELT/LLM news sentiment) added to the model score before ranking.
+        Must be point-in-time (value at date T known at T). Missing -> 0.
+    regime_series : optional benchmark price Series for the trend filter. When
+        ``cfg.regime_filter`` is on and the benchmark is below its MA, exposure
+        is scaled toward cash. Strictly point-in-time.
 
     Returns
     -------
@@ -130,6 +152,7 @@ def run_backtest(
     prev_w = pd.Series(dtype=float)        # strategy weights
     prev_ew = pd.Series(dtype=float)       # equal-weight weights
     last_importance = None
+    risk_off_periods = 0
 
     for i in range(len(dates) - 1):
         t0, t1 = dates[i], dates[i + 1]
@@ -159,6 +182,12 @@ def run_backtest(
                 scores = scores + ov
 
             new_w = _select_and_weight(scores, feats, prev_w, cfg)
+            # Apply the regime/trend filter: scale exposure toward cash in
+            # risk-off periods. Remaining weight is implicitly cash (0 return).
+            exposure = _regime_exposure(regime_series, t0, cfg)
+            if exposure < 1.0:
+                new_w = new_w * exposure
+                risk_off_periods += 1
             traded = len(new_w) > 0
         else:
             new_w = pd.Series(dtype=float)  # not trading yet (warm-up)
@@ -197,6 +226,7 @@ def run_backtest(
         "strategy_returns": strat,
         "equalweight_returns": ew,
         "avg_turnover": float(np.mean(turnovers)) if turnovers else float("nan"),
+        "risk_off_periods": risk_off_periods,
         "rebalance_dates": strat_dates,
         "feature_importance": last_importance,
         "model_kind": RankingModel(use_lightgbm=cfg.use_lightgbm).kind,

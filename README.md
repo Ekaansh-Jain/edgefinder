@@ -75,10 +75,31 @@ First run downloads data (a few minutes); later runs use the cache and are fast.
 
 ---
 
-## The optional free-LLM news layer
+## News-sentiment overlay (the information edge)
 
-The baseline needs **no API key**. To test the news-sentiment overlay, pick a
-free provider and set an env var — the code auto-detects it:
+Price factors alone are efficient on liquid Indian stocks (we measured it — the
+model ties a dumb equal-weight basket). The one place real alpha can hide is
+**information the market hasn't priced** — i.e. news. Two ways to add it:
+
+### A) Free GDELT overlay — no API key, fully backtestable
+
+[GDELT](https://www.gdeltproject.org/) indexes global news with a computed
+"tone" going back years, via a free API. This is one of the few ways to build a
+genuinely **point-in-time** historical news signal.
+
+```bash
+python run.py --news gdelt --universe midcap
+```
+
+It fetches per-company average tone, caches it, and aggregates it
+**point-in-time** (only news on/before each rebalance date, default 30-day
+window) into a score added to the model's ranking. Tune with `--news-window`.
+
+### B) Optional free-LLM re-scoring
+
+Pick a free provider and set its env var (see `.env.example`) — the code
+auto-detects it. **None of these are required** (the GDELT overlay and baseline
+work without any key):
 
 | Provider | Cost | Setup |
 |----------|------|-------|
@@ -86,21 +107,32 @@ free provider and set an env var — the code auto-detects it:
 | **Gemini** | Free tier | `export GEMINI_API_KEY=...`, `pip install google-generativeai` |
 | **Ollama** | Fully free / local | run `ollama serve`, `export USE_OLLAMA=1` |
 
-Provide news as a CSV with columns `date,ticker,text` (ticker in `.NS` form),
-then:
+To score your own headlines, pass a CSV with columns `date,ticker,text`
+(ticker in `.NS` form): `python run.py --news news.csv`.
 
-```bash
-python run.py --news news.csv
-```
-
-Each headline is scored for short-term bullish/bearish impact; scores are
-aggregated **point-in-time** (only news on/before each rebalance date, 30-day
-window) and added to the model's ranking.
-
-> **Look-ahead warning:** if the LLM was trained on data overlapping your
+> **Look-ahead warning:** if an LLM was trained on data overlapping your
 > backtest window, it may "remember" the future and inflate results. For an
 > honest test, restrict the news layer to dates **after** the model's training
 > cutoff. Treat any LLM backtest alpha as an upper bound, not deployment proof.
+
+---
+
+## Regime / trend filter (cut drawdowns)
+
+A classic, well-documented risk lever: when the benchmark closes below its long
+moving average, scale exposure toward cash. Point-in-time (uses only past data).
+
+```bash
+python run.py --regime-filter                       # full cash when risk-off
+python run.py --regime-filter --risk-off-exposure 0.5   # half exposure instead
+```
+
+This usually lowers volatility and drawdown and can improve risk-adjusted
+returns. Combine it with the news overlay:
+
+```bash
+python run.py --news gdelt --regime-filter --universe midcap
+```
 
 ---
 
@@ -113,6 +145,12 @@ Tune everything in `edgefinder/config.py` or via CLI flags:
 | `--universe` | `nifty200` | `nifty50` / `nifty100` / `nifty200` / `midcap` |
 | `--rebalance` | `ME` | `ME` monthly, `W-FRI` weekly |
 | `--top-n` | `25` | stocks held (equal-weighted) |
+| `--weighting` | `inv_vol` | `inv_vol` (risk-parity tilt) or `equal` |
+| `--turnover-buffer` | `0.5` | keep a holding while ranked within (1+buffer)*top_n |
+| `--news` | none | `gdelt` (free overlay) or a CSV path for the LLM layer |
+| `--news-window` | `30` | trailing days of news aggregated per rebalance |
+| `--regime-filter` | off | de-risk to cash when benchmark < its MA |
+| `--risk-off-exposure` | `0.0` | exposure when risk-off (0=cash, 0.5=half) |
 | `--train-min-periods` | `24` | warm-up periods before trading |
 | `--slippage-bps` | `5.0` | modelled slippage per side |
 | `--no-lightgbm` | off | force sklearn/z-score model |
@@ -166,7 +204,9 @@ edgefinder/
   model.py         # LightGBM -> sklearn -> z-score ranking model
   backtest.py      # walk-forward engine + cost accounting
   metrics.py       # CAGR / Sharpe / drawdown / turnover
-  llm_sentiment.py # optional free-LLM news overlay
+  llm_sentiment.py # optional free-LLM news re-scoring (Groq/Gemini/Ollama)
+  gdelt_news.py    # free GDELT news-sentiment overlay (no API key)
 run.py             # CLI entrypoint
+.env.example       # placeholder API keys (all optional)
 .github/workflows/backtest.yml  # run in CI, get real numbers
 ```

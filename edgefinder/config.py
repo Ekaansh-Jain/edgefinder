@@ -67,6 +67,14 @@ class BacktestConfig:
     turnover_buffer: float = 0.5      # keep a holding while ranked within
                                       # (1+buffer)*top_n; reduces churn/costs
 
+    # --- Regime / trend filter (point-in-time) ---
+    # When the benchmark closes below its long moving average, scale exposure
+    # down toward cash. A classic, well-documented way to cut drawdowns and
+    # often improve risk-adjusted returns. Uses only data up to each rebalance.
+    regime_filter: bool = False
+    regime_ma_days: int = 200         # benchmark MA lookback (trading days)
+    risk_off_exposure: float = 0.0    # 0.0 = full cash when risk-off; 0.5 = half
+
     # --- Model / walk-forward ---
     # We retrain the ranking model at each rebalance using only PAST data.
     train_min_periods: int = 24       # min rebalance periods before model trades

@@ -1,5 +1,6 @@
 # Data + outputs
 data_cache/
+news_cache/
 results/
 
 # Python

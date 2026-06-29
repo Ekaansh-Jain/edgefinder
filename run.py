@@ -46,7 +46,16 @@ def parse_args() -> argparse.Namespace:
                    help="force sklearn/zscore instead of LightGBM")
     p.add_argument("--slippage-bps", type=float, default=5.0)
     p.add_argument("--news", default=None,
-                   help="CSV with columns date,ticker,text for the LLM overlay")
+                   help="'gdelt' to auto-build a free news overlay, OR a path to "
+                        "a CSV with columns date,ticker,text for the LLM overlay")
+    p.add_argument("--news-window", type=int, default=30,
+                   help="trailing days of news aggregated per rebalance date")
+    p.add_argument("--news-cache-dir", default="news_cache")
+    p.add_argument("--regime-filter", action="store_true",
+                   help="de-risk toward cash when the benchmark is below its MA")
+    p.add_argument("--regime-ma-days", type=int, default=200)
+    p.add_argument("--risk-off-exposure", type=float, default=0.0,
+                   help="exposure when risk-off (0.0 = full cash, 0.5 = half)")
     p.add_argument("--refresh", action="store_true", help="re-download price data")
     p.add_argument("--cache-dir", default="data_cache")
     p.add_argument("--out-dir", default="results")
@@ -69,6 +78,9 @@ def main() -> None:
         cache_dir=args.cache_dir,
         out_dir=args.out_dir,
         costs=CostModel(slippage_bps=args.slippage_bps),
+        regime_filter=args.regime_filter,
+        regime_ma_days=args.regime_ma_days,
+        risk_off_exposure=args.risk_off_exposure,
     )
 
     tickers = get_universe(cfg.universe)
@@ -80,29 +92,51 @@ def main() -> None:
         tickers, cfg.start, end, cache_dir=cfg.cache_dir, force_refresh=args.refresh
     )
 
-    # Optional LLM overlay (only active if a free provider env var is set).
+    # Benchmark prices (also used by the regime/trend filter, point-in-time).
+    bench_px = load_benchmark(cfg.benchmark, cfg.start, end, cache_dir=cfg.cache_dir)
+
+    # Optional news overlay: 'gdelt' (free, no key) or a CSV for the LLM layer.
     score_overlay = None
     if args.news:
         from edgefinder.backtest import _rebalance_dates
-        from edgefinder.llm_sentiment import build_sentiment_overlay
 
-        news = pd.read_csv(args.news)
         rb = _rebalance_dates(prices, cfg.rebalance)
-        print(f"Building LLM sentiment overlay from {len(news)} news rows ...")
-        score_overlay = build_sentiment_overlay(news, rb, list(prices.columns))
+        if str(args.news).lower() == "gdelt":
+            from edgefinder.gdelt_news import gdelt_overlay
 
-    result = run_backtest(prices, cfg, score_overlay=score_overlay)
+            print("Building free GDELT news-sentiment overlay ...")
+            score_overlay = gdelt_overlay(
+                list(prices.columns), cfg.start, end, rb,
+                cache_dir=args.news_cache_dir, window_days=args.news_window,
+                force_refresh=args.refresh,
+            )
+        else:
+            from edgefinder.llm_sentiment import build_sentiment_overlay
+
+            news = pd.read_csv(args.news)
+            print(f"Building LLM sentiment overlay from {len(news)} news rows ...")
+            score_overlay = build_sentiment_overlay(news, rb, list(prices.columns))
+
+    regime_series = bench_px if cfg.regime_filter else None
+    result = run_backtest(
+        prices, cfg, score_overlay=score_overlay, regime_series=regime_series
+    )
     strat = result["strategy_returns"]
     ew = result["equalweight_returns"]
 
-    # Benchmark aligned to the strategy's realised dates.
-    bench_px = load_benchmark(cfg.benchmark, cfg.start, end, cache_dir=cfg.cache_dir)
+    # Benchmark returns aligned to the strategy's realised dates.
     bench = benchmark_returns(bench_px, list(strat.index)) if len(strat) else pd.Series(dtype=float)
     bench = bench.reindex(strat.index).dropna()
 
+    regime_note = ""
+    if cfg.regime_filter:
+        regime_note = (f"  |  regime filter: ON (risk-off {result['risk_off_periods']} "
+                       f"periods, exposure {cfg.risk_off_exposure})")
     print(f"\nModel used: {result['model_kind']}  |  weighting: {cfg.weighting}  |  "
           f"turnover buffer: {cfg.turnover_buffer}  |  avg one-way turnover/period: "
-          f"{result['avg_turnover'] * 100:.1f}%")
+          f"{result['avg_turnover'] * 100:.1f}%{regime_note}")
+    if score_overlay is not None:
+        print("News overlay: ACTIVE (added to model ranking score)")
     if result["feature_importance"] is not None:
         print("\nTop features (LightGBM importance):")
         print(result["feature_importance"].head(6).to_string())
