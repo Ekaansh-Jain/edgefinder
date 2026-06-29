@@ -30,7 +30,24 @@ def _extract_close(df: "pd.DataFrame | None", ticker: str) -> "pd.Series | None"
     s = s.dropna()
     if s.empty:
         return None
+    s = _normalize_index(s)
     s.name = ticker
+    return s
+
+
+def _normalize_index(s: pd.Series) -> pd.Series:
+    """Force a tz-naive, date-only DatetimeIndex.
+
+    download() returns tz-naive dates, but the history() fallback returns
+    tz-AWARE timestamps. Mixing the two breaks DataFrame alignment with
+    'Cannot join tz-naive with tz-aware DatetimeIndex'. Normalising everything
+    here keeps all sources (download / history / CSV cache) compatible.
+    """
+    idx = pd.DatetimeIndex(s.index)
+    if idx.tz is not None:
+        idx = idx.tz_localize(None)
+    s.index = idx.normalize()
+    s = s[~s.index.duplicated(keep="last")]
     return s
 
 
@@ -103,6 +120,7 @@ def load_prices(
                 cached = pd.read_csv(path, index_col=0, parse_dates=True)
                 if not cached.empty:
                     s = cached.iloc[:, 0]
+                    s = _normalize_index(s)  # fix any tz-aware cached files
                     s.name = ticker
             except Exception:
                 s = None
