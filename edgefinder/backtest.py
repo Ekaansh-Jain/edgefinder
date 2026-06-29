@@ -107,6 +107,21 @@ def _regime_exposure(
     return 1.0 if hist.iloc[-1] >= ma else float(cfg.risk_off_exposure)
 
 
+def _lowvol_scores(feats: pd.DataFrame) -> pd.Series:
+    """Score stocks by LOW risk (the documented low-volatility/low-beta anomaly).
+
+    Higher score = lower risk. We rank on a simple, estimation-error-free
+    composite of trailing volatility, downside volatility, and recent drawdown
+    (no covariance optimisation — simple selection beats min-variance OOS).
+    """
+    from .features import cross_sectional_zscore
+
+    z = cross_sectional_zscore(feats)
+    # vol_6m / downside_vol: lower is better -> negate. max_dd_6m: shallower
+    # (closer to 0, higher value) is better -> reward directly.
+    return -(0.55 * z["vol_6m"] + 0.30 * z["downside_vol"]) + 0.15 * z["max_dd_6m"]
+
+
 def run_backtest(
     prices: pd.DataFrame,
     cfg: BacktestConfig,
@@ -162,9 +177,12 @@ def run_backtest(
 
         fwd = forward_return(prices, t0, t1).reindex(feats.index)
 
-        # ---- train on PAST periods only, then predict for t0 ----
+        # ---- compute ranking scores: low-vol (no training) or ML ----
         traded = False
-        if len(feat_history) >= cfg.train_min_periods:
+        scores = None
+        if cfg.strategy == "lowvol":
+            scores = _lowvol_scores(feats)
+        elif len(feat_history) >= cfg.train_min_periods:
             X_train = pd.concat(feat_history)
             y_train = pd.concat(label_history)
             model = RankingModel(
@@ -174,6 +192,7 @@ def run_backtest(
             scores = model.predict(feats)
             last_importance = model.feature_importance()
 
+        if scores is not None:
             if score_overlay is not None and t0 in score_overlay.index:
                 ov = score_overlay.loc[t0].reindex(scores.index).fillna(0.0)
                 # standardise overlay so it doesn't dominate the model score
@@ -190,7 +209,7 @@ def run_backtest(
                 risk_off_periods += 1
             traded = len(new_w) > 0
         else:
-            new_w = pd.Series(dtype=float)  # not trading yet (warm-up)
+            new_w = pd.Series(dtype=float)  # not trading yet (ML warm-up)
 
         # ---- realise strategy return over t0..t1, net of costs ----
         if traded:
@@ -229,7 +248,10 @@ def run_backtest(
         "risk_off_periods": risk_off_periods,
         "rebalance_dates": strat_dates,
         "feature_importance": last_importance,
-        "model_kind": RankingModel(use_lightgbm=cfg.use_lightgbm).kind,
+        "model_kind": (
+            "lowvol-anomaly" if cfg.strategy == "lowvol"
+            else RankingModel(use_lightgbm=cfg.use_lightgbm).kind
+        ),
     }
 
 

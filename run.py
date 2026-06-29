@@ -35,6 +35,9 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--end", default=None)
     p.add_argument("--rebalance", default="ME", help="pandas offset, e.g. ME or W-FRI")
     p.add_argument("--top-n", type=int, default=25)
+    p.add_argument("--strategy", default="ml", choices=["ml", "lowvol"],
+                   help="'ml' learned ranking, or 'lowvol' (low-volatility "
+                        "anomaly: rank by lowest risk, no training)")
     p.add_argument("--weighting", default="inv_vol", choices=["inv_vol", "equal"],
                    help="how to weight selected names (inv_vol = risk-parity tilt)")
     p.add_argument("--turnover-buffer", type=float, default=0.5,
@@ -73,6 +76,7 @@ def main() -> None:
         end=args.end,
         rebalance=args.rebalance,
         top_n=args.top_n,
+        strategy=args.strategy,
         weighting=args.weighting,
         turnover_buffer=args.turnover_buffer,
         annualization=args.annualization,

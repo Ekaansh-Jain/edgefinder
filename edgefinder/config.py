@@ -66,6 +66,9 @@ class BacktestConfig:
     weighting: str = "inv_vol"        # 'equal' or 'inv_vol' (lower-vol names get more)
     turnover_buffer: float = 0.5      # keep a holding while ranked within
                                       # (1+buffer)*top_n; reduces churn/costs
+    strategy: str = "ml"              # 'ml' (learned ranking) or 'lowvol'
+                                      # (rank by lowest risk; the documented
+                                      # low-volatility anomaly, no training)
 
     # --- Regime / trend filter (point-in-time) ---
     # When the benchmark closes below its long moving average, scale exposure

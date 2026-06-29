@@ -145,6 +145,7 @@ Tune everything in `edgefinder/config.py` or via CLI flags:
 | `--universe` | `nifty200` | `nifty50` / `nifty100` / `nifty200` / `midcap` |
 | `--rebalance` | `ME` | `ME` monthly, `W-FRI` weekly |
 | `--top-n` | `25` | stocks held (equal-weighted) |
+| `--strategy` | `ml` | `ml` (learned ranking) or `lowvol` (low-volatility anomaly) |
 | `--weighting` | `inv_vol` | `inv_vol` (risk-parity tilt) or `equal` |
 | `--turnover-buffer` | `0.5` | keep a holding while ranked within (1+buffer)*top_n |
 | `--news` | none | `gdelt` (free overlay) or a CSV path for the LLM layer |
