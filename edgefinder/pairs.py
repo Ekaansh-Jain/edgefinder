@@ -42,10 +42,37 @@ def _normalize(window: pd.DataFrame) -> pd.DataFrame:
     return norm.replace([np.inf, -np.inf], np.nan)
 
 
+def _adf_pvalue(series: pd.Series) -> float:
+    """Augmented Dickey-Fuller p-value (low => stationary/mean-reverting).
+
+    Uses statsmodels if available; returns 1.0 (i.e. 'not stationary, reject')
+    if it's missing so the filter fails safe rather than silently passing junk.
+    """
+    try:
+        from statsmodels.tsa.stattools import adfuller
+
+        s = series.dropna()
+        if len(s) < 30 or s.std() == 0:
+            return 1.0
+        return float(adfuller(s, autolag="AIC")[1])
+    except Exception:
+        return 1.0
+
+
 def select_pairs_distance(
-    formation_prices: pd.DataFrame, top_k: int, min_obs: int
+    formation_prices: pd.DataFrame,
+    top_k: int,
+    min_obs: int,
+    require_stationary: bool = False,
+    adf_pvalue: float = 0.05,
 ) -> list[tuple[str, str, float, float]]:
     """Pick the top_k most-similar pairs by sum-of-squared distance.
+
+    If ``require_stationary`` is set, a candidate is kept only if its spread
+    passes an ADF stationarity test (p < ``adf_pvalue``) — i.e. it is genuinely
+    mean-reverting (cointegration filtering), the method behind the profitable
+    statistical-arbitrage literature. Needs statsmodels; install it or the
+    filter rejects everything (fail-safe).
 
     Returns list of (ticker_a, ticker_b, spread_mean, spread_std).
     """
@@ -58,12 +85,20 @@ def select_pairs_distance(
     for a, b in itertools.combinations(cols, 2):
         spread = norm[a] - norm[b]
         ssd = float((spread ** 2).sum())
-        results.append((a, b, ssd, spread.mean(), spread.std()))
+        results.append((a, b, ssd, spread.mean(), spread.std(), spread))
     results.sort(key=lambda r: r[2])  # smallest distance first
-    out = []
-    for a, b, _ssd, mu, sd in results[:top_k]:
-        if sd and sd > 0:
-            out.append((a, b, float(mu), float(sd)))
+
+    out: list[tuple[str, str, float, float]] = []
+    # When filtering, scan more candidates (cheap pairs first) until we fill top_k.
+    scan = results if require_stationary else results[:top_k]
+    for a, b, _ssd, mu, sd, spread in scan:
+        if not sd or sd <= 0:
+            continue
+        if require_stationary and _adf_pvalue(spread) >= adf_pvalue:
+            continue
+        out.append((a, b, float(mu), float(sd)))
+        if len(out) >= top_k:
+            break
     return out
 
 
@@ -135,6 +170,8 @@ def backtest_pairs(
     exit_z: float = 0.5,
     stop_z: float = 4.0,
     cost_per_leg: float = 0.0015,
+    require_stationary: bool = False,
+    adf_pvalue: float = 0.05,
 ) -> dict:
     """Walk-forward market-neutral pairs backtest. Returns daily-return diagnostics."""
     prices = prices.sort_index()
@@ -149,7 +186,10 @@ def backtest_pairs(
         formation = prices.loc[form_idx]
         base = formation.iloc[0]
 
-        pairs = select_pairs_distance(formation, top_k, min_obs=int(formation_days * 0.8))
+        pairs = select_pairs_distance(
+            formation, top_k, min_obs=int(formation_days * 0.8),
+            require_stationary=require_stationary, adf_pvalue=adf_pvalue,
+        )
         if pairs:
             pair_daily = []
             for a, b, mu, sd in pairs:

@@ -37,6 +37,10 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--stop-z", type=float, default=4.0)
     p.add_argument("--cost-bps", type=float, default=15.0,
                    help="per-leg round-trip cost in basis points")
+    p.add_argument("--cointegration", action="store_true",
+                   help="only trade pairs whose spread passes an ADF stationarity "
+                        "test (needs statsmodels: pip install statsmodels)")
+    p.add_argument("--adf-pvalue", type=float, default=0.05)
     p.add_argument("--cache-dir", default="data_cache")
     p.add_argument("--refresh", action="store_true")
     return p.parse_args()
@@ -61,6 +65,8 @@ def main() -> None:
         exit_z=args.exit_z,
         stop_z=args.stop_z,
         cost_per_leg=args.cost_bps / 10_000.0,
+        require_stationary=args.cointegration,
+        adf_pvalue=args.adf_pvalue,
     )
     daily = result["daily_returns"]
 

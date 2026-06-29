@@ -9,6 +9,9 @@ requests>=2.28            # free GDELT news-sentiment fetcher (no API key)
 # Optional but recommended (the workhorse model). Falls back to sklearn if absent.
 lightgbm>=4.0
 
+# Optional: cointegration filtering for pairs trading (run_pairs.py --cointegration)
+# statsmodels>=0.14
+
 # Optional: only needed if you enable the free-LLM news re-scoring layer.
 # Pick ONE provider; none are required for the baseline or the GDELT overlay.
 # groq>=0.9              # Groq free tier (fast). Set GROQ_API_KEY.
