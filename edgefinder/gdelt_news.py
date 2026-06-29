@@ -98,33 +98,52 @@ def load_tone(
     cache_dir: str = "news_cache",
     force_refresh: bool = False,
 ) -> dict[str, pd.Series]:
-    """Return {ticker: daily tone Series}, fetching+caching as needed."""
+    """Return {ticker: daily tone Series}, fetching+caching as needed.
+
+    Caches BOTH hits (CSV) and misses (an empty '.empty' marker) so that a
+    re-run never re-queries the slow GDELT endpoint for tickers it already
+    knows about. Delete the cache dir or pass force_refresh=True to refetch.
+    """
     os.makedirs(cache_dir, exist_ok=True)
     out: dict[str, pd.Series] = {}
+    n_hit = n_fetched = n_empty = 0
+
     for i, ticker in enumerate(tickers, 1):
         path = _cache_path(cache_dir, ticker)
+        empty_marker = path + ".empty"
         s: pd.Series | None = None
+
+        if not force_refresh and os.path.exists(empty_marker):
+            n_empty += 1
+            continue  # known to have no GDELT data -> skip entirely
 
         if os.path.exists(path) and not force_refresh:
             try:
                 df = pd.read_csv(path, index_col=0, parse_dates=True)
                 if not df.empty:
                     s = df.iloc[:, 0]
+                    n_hit += 1
             except Exception:
                 s = None
 
-        if s is None:
+        if s is None and not os.path.exists(path):
             query = get_company_query(ticker)
             print(f"[{i}/{len(tickers)}] GDELT tone: {ticker} ('{query}') ...")
             s = _fetch_tone_series(query, start, end)
             if s is not None and not s.empty:
                 s.to_frame(name="tone").to_csv(path)
-            time.sleep(1.0)  # GDELT is rate-limited; be gentle
+                n_fetched += 1
+            else:
+                open(empty_marker, "w").close()  # negative cache the miss
+                n_empty += 1
+            time.sleep(0.7)  # GDELT is rate-limited; be gentle
 
         if s is not None and not s.empty:
             s.index = pd.DatetimeIndex(s.index)
             out[ticker] = s
-    print(f"GDELT tone loaded for {len(out)}/{len(tickers)} tickers")
+
+    print(f"GDELT tone: {len(out)} usable  (cache hits {n_hit}, newly fetched "
+          f"{n_fetched}, no-data {n_empty})")
     return out
 
 
